@@ -74,6 +74,53 @@ public class InitializationTests(ModuleResolverFixture fixture) : PassTestBase(f
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void OpenDelegateBindingPreservesGenericArgumentModuleInitialization(bool nativeAot, bool throwing)
+    {
+        var body = Utils.CreateTestMethod(_modResolver, PrimType.Int32);
+        var module = body.Definition.Module;
+        var effect = body.Definition.DeclaringType.CreateField("Effect", PrimType.Int32, FieldAttributes.Public | FieldAttributes.Static);
+        var library = _modResolver.Create("DelegateArgument_" + Guid.NewGuid().ToString("N"));
+        Initialize(library.FindType(null, "<Module>")!, effect, 10, throwing);
+        var argument = library.CreateType(null, "Argument");
+        var owner = module.CreateType(null, "Receiver`1", TypeAttributes.Public | TypeAttributes.Abstract,
+            genericParams: [new GenericParamType(0, false)]);
+        owner.CreateMethod("Read", PrimType.Int32, [new ParamDef(owner.GetUnboundSpec(), "this")],
+            MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.NewSlot);
+        var receiver = owner.GetSpec([argument]);
+        var delegateType = _modResolver.Import(typeof(Func<,>)).GetSpec([receiver, PrimType.Int32]);
+
+        var typeType = _modResolver.Import(typeof(Type));
+        var methodInfo = _modResolver.Import(typeof(MethodInfo));
+        var getType = typeType.FindMethod("GetTypeFromHandle",
+            new MethodSig(typeType, [_modResolver.Import(typeof(RuntimeTypeHandle))], false));
+        var getMethod = typeType.FindMethod("GetMethod", new MethodSig(methodInfo, [PrimType.String], true));
+        var createDelegate = methodInfo.FindMethod("CreateDelegate", new MethodSig(_modResolver.Import(typeof(Delegate)), [typeType], true));
+        var builder = new IRBuilder(body.CreateBlock());
+        var reflectedOwner = builder.CreateCall(getType, builder.Emit(new CilIntrinsic.LoadHandle(_modResolver, receiver)));
+        var reflectedDelegate = builder.CreateCall(getType, builder.Emit(new CilIntrinsic.LoadHandle(_modResolver, delegateType)));
+        var method = builder.CreateCallVirt(getMethod, reflectedOwner, ConstString.Create("Read"));
+        builder.CreateCallVirt(createDelegate, method, reflectedDelegate);
+        builder.CreateReturn(builder.CreateFieldLoad(effect));
+        CheckExecution(body, Check, library);
+
+        var compilation = new Compilation(module, new VoidLogger(), new() {
+            VerifyEachPass = true, NativeAotCompatibility = nativeAot
+        });
+        Assert.True(CompilationPipeline.CreateDefault(compilation).Run([body.Definition]).Succeeded);
+        CheckExecution(body.Definition.Body!, Check, library);
+
+        void Check(Func<int> run)
+        {
+            if (throwing) Assert.IsType<InvalidOperationException>(Assert.Throws<TypeInitializationException>(() => run()).InnerException);
+            else Assert.Equal(10, run());
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void LocalTypeInitializationUsesAnEmptyMethodOnTheExactType(bool generic)

@@ -42,8 +42,34 @@ public static unsafe class ReflectionDelegateCases
         => ((Func<Target, int, int>)Delegate.CreateDelegate(typeof(Func<Target, int, int>),
             typeof(Target).GetMethod(nameof(Target.AddInstance))!))(new Target(), 2);
 
+    public static object OpenStaticFactoryWithFlagEffects()
+    {
+        Result = 0;
+        var callback = (Func<Target, int, int>)Delegate.CreateDelegate(typeof(Func<Target, int, int>),
+            typeof(Target).GetMethod(nameof(Target.AddInstance))!, BindingFlag())!;
+        return Result * 100 + callback(new Target(), 2);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool BindingFlag() { Result++; return false; }
+
     public static object OpenWithNullTarget()
         => typeof(Target).GetMethod(nameof(Target.AddInstance))!.CreateDelegate<Func<Target, int, int>>(null)(new Target(), 2);
+
+    public static object LargeValueOpenBinding()
+    {
+        try {
+            _ = typeof(LargeValueTarget).GetMethod(nameof(LargeValueTarget.Read))!.CreateDelegate<LargeValueReader>();
+            return "created";
+        } catch (NotSupportedException error) {
+            return error.GetType().Name;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, Size = 524288)]
+    public struct LargeValue { }
+    public abstract class LargeValueTarget { public abstract int Read(LargeValue value); }
+    public delegate int LargeValueReader(LargeValueTarget receiver, LargeValue value);
 
     public static object OpenNullNonvirtual()
         => typeof(Target).GetMethod(nameof(Target.WithoutThis))!.CreateDelegate<Func<Target, int>>()(null!);
@@ -206,6 +232,22 @@ public static unsafe class ReflectionDelegateCases
         var action = typeof(Target).GetMethod(nameof(Target.Increment))!.CreateDelegate<RefAction>();
         GC.KeepAlive(action);
         return Result;
+    }
+
+    public delegate int OpenAbstractRead(ReflectionGenericCases.Abstract receiver);
+
+    public static void UnusedOpenAbstractDelegate()
+    {
+        Result = 0;
+        _ = typeof(ReflectionGenericCases.Abstract).GetMethod("Read")!.CreateDelegate<OpenAbstractRead>();
+    }
+
+    public static object OpenDelegateTypeInitialization()
+    {
+        Result = 0;
+        var callback = typeof(ReflectionGenericCases.Abstract).GetMethod("Read")!.CreateDelegate<OpenAbstractRead>();
+        int before = Result;
+        return before * 100 + callback(new ReflectionGenericCases.Concrete());
     }
 
     public static object DelegateException()

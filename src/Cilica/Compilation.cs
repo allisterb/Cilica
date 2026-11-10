@@ -142,7 +142,7 @@ public partial class Compilation
         var body = Ensure.NotNull(callee.Definition.Body);
         if (TypeUtils.HasClassMethodImpls(callee) && !VirtualDispatch.SameMethod(VirtualDispatch.ResolveDirect(callee), callee)) return false;
         if (body.LocalVars().Any(slot => slot.Type is TypeDefOrSpec { IsValueType: false } type &&
-            Passes.ScalarReplacement.HasFinalizer(type))) return false;
+            TypeUtils.HasFinalizer(type))) return false;
         bool differentExceptionPolicy = caller.Module != callee.Module && WrapsNonExceptions(caller.Module) != WrapsNonExceptions(callee.Module);
         // Tail calls return from their enclosing method, not an inlined
         // continuation (including constructor expansion).
@@ -154,7 +154,7 @@ public partial class Compilation
             if (inst is CilIntrinsic.CallIndirect { FunctionType.Signature.CallConv: not CallConvention.Managed }) return false;
             // Finalizable allocations depend on their enclosing frame's lifetime,
             // including hidden temporaries introduced by the runtime JIT.
-            if (inst is NewObjInst allocation && Passes.ScalarReplacement.HasFinalizer(allocation.ResultType)) return false;
+            if (inst is NewObjInst allocation && TypeUtils.HasFinalizer(allocation.ResultType)) return false;
             var called = inst switch { CallInst call => call.Method, NewObjInst obj => obj.Constructor, FuncAddrInst address => address.Method, _ => null };
             if (called != null && IsFrameSensitive(called)) return false;
         }

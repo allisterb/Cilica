@@ -84,7 +84,7 @@ public class ScalarReplacement : IMethodPass
         if (alloc.Constructor is not MethodDefOrSpec { Definition: var ctor }) {
             return false;
         }
-        if (alloc.ResultType.IsValueType || HasFinalizer(alloc.ResultType)) {
+        if (alloc.ResultType.IsValueType || TypeUtils.HasFinalizer(alloc.ResultType)) {
             return false;
         }
         for (var type = alloc.ResultType as TypeDefOrSpec; type != null; type = type.BaseType) {
@@ -122,17 +122,6 @@ public class ScalarReplacement : IMethodPass
             CilIntrinsic.MemCopy => use.OperIndex > 1,
             _ => true
         });
-
-    internal static bool HasFinalizer(TypeDesc type)
-    {
-        // Primitive aliases and array types cannot declare a finalizer and do
-        // not expose a nominal method table through TypeDesc.Methods.
-        for (TypeDesc? curr = type; curr is TypeDefOrSpec && !curr.IsCorelibType(typeof(object)); curr = curr.BaseType) {
-            if (curr.Methods.Any(m => m.Name == "Finalize" && m.IsInstance && m.ParamSig.Count == 1 &&
-                m.Attribs.HasFlag(System.Reflection.MethodAttributes.Virtual))) return true;
-        }
-        return false;
-    }
 
     private static bool IsObjectCtorCall(Instruction inst)
     {

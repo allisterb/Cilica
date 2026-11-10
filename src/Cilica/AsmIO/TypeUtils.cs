@@ -26,6 +26,22 @@ public static class TypeUtils
         => (method.IsStatic || method.IsConstructor || method.DeclaringType.IsValueType || method.DeclaringType.IsInterface) &&
            method.DeclaringType.RequiresTypeInitialization();
 
+    internal static bool HasFinalizer(TypeDesc type)
+    {
+        // Primitive aliases and array types cannot declare a finalizer and do
+        // not expose a nominal method table through TypeDesc.Methods.
+        for (var current = type as TypeDefOrSpec; current != null && !current.IsCorelibType(typeof(object)); current = current.BaseType) {
+            if (current.Methods.Any(method => HasFinalizerSignature(method) && method.Attribs.HasFlag(MethodAttributes.Virtual))) return true;
+            // A MethodImpl can supply Object.Finalize using a differently named body.
+            if (current.Definition.MethodImpls.Keys.Any(declaration =>
+                !declaration.DeclaringType.IsInterface && HasFinalizerSignature(declaration))) return true;
+        }
+        return false;
+
+        static bool HasFinalizerSignature(MethodDesc method)
+            => method.Name == "Finalize" && method.IsInstance && method.ParamSig.Count == 1;
+    }
+
     /// <summary> Checks if this type is defined in <c>System.Private.CoreLib</c>. </summary>
     public static bool IsCorelibType(this TypeDesc desc)
     {

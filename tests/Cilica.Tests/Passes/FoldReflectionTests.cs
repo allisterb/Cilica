@@ -549,10 +549,10 @@ public partial class FoldReflectionTests
             };
         }
 
-        public void AddDelegateTypeInitializer(bool beforeFieldInit)
+        public void AddDelegateTypeInitializer(bool beforeFieldInit, string delegateName = "RefAction")
         {
             var owner = _module.FindType(null, _typeName)!;
-            var delegateType = owner.NestedTypes.Single(type => type.Name == "RefAction");
+            var delegateType = owner.NestedTypes.Single(type => type.Name == delegateName);
             if (beforeFieldInit) delegateType.Attribs |= TypeAttributes.BeforeFieldInit;
             else delegateType.Attribs &= ~TypeAttributes.BeforeFieldInit;
             var initializer = delegateType.CreateMethod(".cctor", PrimType.Void, [],
@@ -562,6 +562,21 @@ public partial class FoldReflectionTests
             builder.CreateFieldStore(owner.FindField("Result"), null, Cilica.IR.ConstInt.CreateI(42));
             builder.CreateReturn();
             initializer.ILBody = Cilica.CodeGen.Cil.ILGenerator.GenerateCode(initializer.Body);
+        }
+
+        public void AddDelegateFinalizer(bool explicitImplementation)
+        {
+            var owner = _module.FindType(null, _typeName)!;
+            var delegateType = owner.NestedTypes.Single(type => type.Name == "OpenAbstractRead");
+            var finalizer = delegateType.CreateMethod(explicitImplementation ? "FinalizeImpl" : "Finalize", PrimType.Void,
+                [new ParamDef(delegateType, "this")], MethodAttributes.Virtual | MethodAttributes.HideBySig |
+                (explicitImplementation ? MethodAttributes.Private | MethodAttributes.NewSlot : MethodAttributes.Family));
+            if (explicitImplementation) delegateType.MethodImpls.Add(_resolver.Import(typeof(object)).FindMethod("Finalize"), finalizer);
+            finalizer.Body = new Cilica.IR.MethodBody(finalizer);
+            var builder = new IRBuilder(finalizer.Body.CreateBlock());
+            builder.CreateFieldStore(owner.FindField("Result"), null, ConstInt.CreateI(1));
+            builder.CreateReturn();
+            finalizer.ILBody = Cilica.CodeGen.Cil.ILGenerator.GenerateCode(finalizer.Body);
         }
 
         public void Dispose() => _resolver.Dispose();

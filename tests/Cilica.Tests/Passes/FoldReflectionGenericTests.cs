@@ -225,8 +225,6 @@ partial class FoldReflectionTests
     [InlineData("MissingTypeArgument")]
     [InlineData("WrongArity")]
     [InlineData("AlreadyConstructed")]
-    [InlineData("OpenInterfaceDelegate")]
-    [InlineData("OpenAbstractDelegate")]
     [InlineData("OpenGenericVirtualDelegate")]
     [InlineData("ChangedTypeArguments")]
     public void UnprovenGenericConstructionsRetainRuntimeBehavior(string name)

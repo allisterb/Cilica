@@ -647,6 +647,12 @@ public static unsafe class ReflectionAccessorCases
     public static object VirtualGetter()
         => typeof(Base).GetProperty(nameof(Base.Value))!.GetMethod!.CreateDelegate<Func<int>>(new Derived())();
 
+    public static int OpenAbstractProperty()
+    {
+        var callback = typeof(AbstractBase).GetProperty("Value")?.GetMethod?.CreateDelegate<Func<AbstractBase, int>>();
+        return callback!.Invoke(new AbstractBar());
+    }
+
     public static object VirtualGetterIdentity()
     {
         var method = typeof(Base).GetProperty(nameof(Base.Value))!.GetMethod!;
@@ -752,5 +758,8 @@ public static unsafe class ReflectionAccessorCases
     public interface IValue { int Value { get; } }
     public class Base : IValue { public virtual int Value => 1; }
     public sealed class Derived : Base { public override int Value => 42; }
+    public abstract class AbstractBase { public abstract int Value { get; } }
+    public class AbstractFoo : AbstractBase { public override int Value => 1; }
+    public class AbstractBar : AbstractFoo { public override int Value => 2; }
     public struct Counter { public int Value { get; set; } }
 }

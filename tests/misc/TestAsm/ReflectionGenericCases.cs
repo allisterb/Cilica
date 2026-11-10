@@ -256,6 +256,12 @@ public static unsafe class ReflectionGenericCases
     public static object OpenAbstractDelegate()
         => typeof(Abstract).GetMethod(nameof(Abstract.Read))!.CreateDelegate<Func<Abstract, int>>()(new Concrete());
 
+    public static object OpenAbstractObserved()
+    {
+        var callback = typeof(Abstract).GetMethod(nameof(Abstract.Read))!.CreateDelegate<Func<Abstract, int>>();
+        return callback.Method.DeclaringType == typeof(Abstract) && callback.Target == null && callback(new Concrete()) == 42;
+    }
+
     public static object OpenGenericVirtualDelegate()
     {
         try {

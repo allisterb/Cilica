@@ -11,10 +11,14 @@ partial class ReflectionRewriter
     private bool FoldDelegate(CallInst call, DelegateCreation creation, MethodDefOrSpec method)
     {
         if (BindDelegate(creation, method) is not { } binding) return false;
-        if (binding.IsOpen && method.IsInstance && MustKeepOpenInstanceFactory(method)) {
-            // Binding failures and initialization still belong to the factory.
-            // Its successful invocations can use the proven target directly.
-            return FoldOpenInstanceInvocations(call, creation.Type, method);
+        if (binding.IsOpen && method.IsInstance) {
+            bool bindingIsValid = CanProveOpenInstanceBinding(method);
+            bool changed = FoldOpenInstanceInvocations(call, creation.Type, method, bindingIsValid);
+            if (bindingIsValid && call.NumUses == 0 && CanDiscardDelegateBinding(creation.Type, method)) {
+                call.Remove();
+                return true;
+            }
+            if (!bindingIsValid || !CanConstructOpenInstanceDelegate(method)) return changed;
         }
 
         bool virtualTarget = !binding.IsOpen && method.IsInstance &&
@@ -73,14 +77,69 @@ partial class ReflectionRewriter
         return _types.IsReferenceType(firstParameter) && CanConvert(target, firstParameter);
     }
 
-    private bool MustKeepOpenInstanceFactory(MethodDefOrSpec method)
+    private bool CanConstructOpenInstanceDelegate(MethodDefOrSpec method)
     {
         // NativeAOT cannot express an open instance binding with constructor IL.
-        if (_ctx.Compilation.Settings.NativeAotCompatibility) return true;
-        // Abstract and generic virtual bindings need runtime dispatch machinery;
-        // a method address alone does not preserve their binding failures.
-        if (method.Attribs.HasFlag(MethodAttributes.Abstract)) return true;
-        return method.IsGeneric && !method.DeclaringType.IsValueType && method.Attribs.HasFlag(MethodAttributes.Virtual);
+        if (_ctx.Compilation.Settings.NativeAotCompatibility) return false;
+        return !method.Attribs.HasFlag(MethodAttributes.Abstract);
+    }
+
+    // CoreCLR's open virtual dispatch stub rejects instantiated generic methods.
+    // Abstract non-generic slots use normal virtual dispatch and can bind.
+    private static bool IsGenericVirtualReferenceMethod(MethodDefOrSpec method)
+        => method.IsGeneric && !method.DeclaringType.IsValueType && method.Attribs.HasFlag(MethodAttributes.Virtual);
+
+    private bool CanProveOpenInstanceBinding(MethodDefOrSpec method)
+    {
+        if (IsGenericVirtualReferenceMethod(method)) return false;
+
+        // Exact signatures can still exceed the runtime shuffle thunk's encoding.
+        // Apple arm64 has the smallest range: 12-bit byte offsets. Bound each
+        // scalar slot by 8 bytes, reserving delegate 'this' and a hidden argument.
+        const int maxScalarArguments = (0x1000 / sizeof(ulong)) - 2;
+        if (method.ParamSig.Count > maxScalarArguments) return false;
+        if (method.ReturnType != PrimType.Void && !HasPortableDelegateSlot(method.ReturnType)) return false;
+        return method.ParamSig.All(parameter => HasPortableDelegateSlot(parameter.Type));
+    }
+
+    private bool HasPortableDelegateSlot(TypeDesc type)
+        // Aggregate layouts and unconstrained value-type variables need target
+        // ABI information; their binding must remain a runtime operation.
+        => type is GenericParamType ? _types.IsReferenceType(type)
+            : type.StackType is StackType.Int or StackType.Long or StackType.NInt or StackType.Float or StackType.ByRef or StackType.Object;
+
+    private bool CanDiscardDelegateBinding(TypeDefOrSpec delegateType, MethodDefOrSpec method)
+    {
+        // Allocation can register a finalizer or initialize the delegate type.
+        // Binding can also activate modules used by the target and its signature.
+        // Keep the factory when those effects may be observable, including for
+        // delegate types whose initializer is marked BeforeFieldInit.
+        if (delegateType.Definition.HasStaticConstructor || TypeUtils.HasFinalizer(delegateType)) return false;
+        if (_types.Resolver.SkipModuleInitializers) return true;
+
+        var pending = new Stack<TypeDesc>(method.GenericParams);
+        var visited = new HashSet<TypeDesc>(ReferenceEqualityComparer.Instance);
+        var visitedBases = new HashSet<TypeDef>();
+        pending.Push(delegateType);
+        pending.Push(method.DeclaringType);
+        while (pending.TryPop(out var type)) {
+            if (!visited.Add(type)) continue;
+            if (type is GenericParamType) return false;
+            if (type is CompoundType compound) {
+                pending.Push(compound.ElemType);
+                continue;
+            }
+            if (type is PrimType primitive) type = primitive.GetDefinition(_types.Resolver);
+            if (type is not TypeDefOrSpec nominal) continue;
+            if (nominal.RequiresModuleInitialization()) return false;
+            foreach (var argument in nominal.GenericParams) pending.Push(argument);
+
+            // The base introduces fixed metadata types; actual arguments are
+            // inspected separately. Visiting each definition once also bounds
+            // activation through recursive generic inheritance.
+            if (visitedBases.Add(nominal.Definition) && nominal.BaseType is { } parent) pending.Push(parent);
+        }
+        return true;
     }
 
     private bool PreservesDelegateIdentity(CallInst factory, DelegateCreation creation, MethodDefOrSpec method)
@@ -99,11 +158,13 @@ partial class ReflectionRewriter
         return VirtualDispatch.SameMethod(_lookups.ResolveVirtualMethod(method, exactType), method);
     }
 
-    private bool FoldOpenInstanceInvocations(CallInst factory, TypeDefOrSpec delegateType, MethodDefOrSpec method)
+    private bool FoldOpenInstanceInvocations(CallInst factory, TypeDefOrSpec delegateType, MethodDefOrSpec method, bool bindingIsValid)
     {
-        bool changed = false;
+        bool changed = bindingIsValid && !factory.ResultIsNonNull;
+        if (bindingIsValid) factory.ResultIsNonNull = true;
         var pending = new Stack<Instruction>();
         var visited = new HashSet<Instruction>();
+        var casts = new List<Instruction>();
         pending.Push(factory);
         while (pending.TryPop(out var value)) {
             if (!visited.Add(value)) continue;
@@ -112,6 +173,12 @@ partial class ReflectionRewriter
                 if (user is CilIntrinsic.CastClass or CilIntrinsic.RefCast or CilIntrinsic.AsInstance &&
                     user.ResultType == delegateType) {
                     pending.Push(user);
+                    casts.Add(user);
+                    continue;
+                }
+                if (bindingIsValid && user is CilIntrinsic.NullCheck) {
+                    user.Remove();
+                    changed = true;
                     continue;
                 }
                 if (MatchDelegateInvocation(user, delegateType) is not { } invocation) continue;
@@ -120,9 +187,17 @@ partial class ReflectionRewriter
 
                 // A factory that returns null must still fail at invocation,
                 // after the invocation arguments have been evaluated.
-                if (!invocation.InBounds) BuilderBefore(invocation).CreateNullCheck(value);
+                if (!bindingIsValid && !invocation.InBounds) BuilderBefore(invocation).CreateNullCheck(value);
                 _ctx.Logger.Trace($"Replaced open delegate invocation '{invocation}' in '{invocation.Block}' with a call to '{method}'.");
                 invocation.ReplaceWith(direct, insertIfInst: true);
+                changed = true;
+            }
+        }
+        // These casts preserve the exact delegate type established by binding.
+        // Remove unused children before parents so they cannot keep a dead factory.
+        for (int i = casts.Count - 1; i >= 0; i--) {
+            if (casts[i].NumUses == 0) {
+                casts[i].Remove();
                 changed = true;
             }
         }
