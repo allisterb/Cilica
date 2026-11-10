@@ -142,6 +142,20 @@ partial class FoldReflectionTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void OpenDelegateInvocationPreservesLifetimeDuringArgumentEvaluation(bool nativeAot, bool explicitImplementation)
+    {
+        using var test = new Case("UsedFinalizableOpenDelegate", "ReflectionDelegateCases");
+        test.AddDelegateFinalizer(explicitImplementation);
+        Assert.Equal(0, test.Emit().Invoke(null, null));
+        test.Optimize(defaultPipeline: true, nativeAotCompatibility: nativeAot);
+        Assert.Equal(0, test.Emit().Invoke(null, null));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void EliminatedOpenFactoriesKeepRequestedTrimmingDependencies(bool nativeAot)

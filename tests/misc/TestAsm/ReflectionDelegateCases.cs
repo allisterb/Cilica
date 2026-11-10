@@ -242,6 +242,26 @@ public static unsafe class ReflectionDelegateCases
         _ = typeof(ReflectionGenericCases.Abstract).GetMethod("Read")!.CreateDelegate<OpenAbstractRead>();
     }
 
+    public static int FinalizerObservation;
+
+    public static object UsedFinalizableOpenDelegate()
+    {
+        Result = 0;
+        FinalizerObservation = -1;
+        var callback = typeof(ReflectionGenericCases.Abstract).GetMethod("Read")!.CreateDelegate<OpenAbstractRead>();
+        callback(CollectBeforeOpenDelegateReceiver());
+        return FinalizerObservation;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ReflectionGenericCases.Concrete CollectBeforeOpenDelegateReceiver()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        FinalizerObservation = Result;
+        return new ReflectionGenericCases.Concrete();
+    }
+
     public static object OpenDelegateTypeInitialization()
     {
         Result = 0;

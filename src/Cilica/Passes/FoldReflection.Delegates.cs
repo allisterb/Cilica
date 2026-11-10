@@ -11,6 +11,9 @@ partial class ReflectionRewriter
     private bool FoldDelegate(CallInst call, DelegateCreation creation, MethodDefOrSpec method)
     {
         if (BindDelegate(creation, method) is not { } binding) return false;
+        // Invoke keeps its delegate alive while arguments are evaluated.
+        // Rewriting it must not expose a finalizer during those evaluations.
+        if (TypeUtils.HasFinalizer(creation.Type)) return false;
         if (binding.IsOpen && method.IsInstance) {
             bool bindingIsValid = CanProveOpenInstanceBinding(method);
             bool changed = FoldOpenInstanceInvocations(call, creation.Type, method, bindingIsValid);
@@ -110,11 +113,11 @@ partial class ReflectionRewriter
 
     private bool CanDiscardDelegateBinding(TypeDefOrSpec delegateType, MethodDefOrSpec method)
     {
-        // Allocation can register a finalizer or initialize the delegate type.
-        // Binding can also activate modules used by the target and its signature.
+        // Binding can initialize the delegate type or activate modules used by
+        // the target and its signature.
         // Keep the factory when those effects may be observable, including for
         // delegate types whose initializer is marked BeforeFieldInit.
-        if (delegateType.Definition.HasStaticConstructor || TypeUtils.HasFinalizer(delegateType)) return false;
+        if (delegateType.Definition.HasStaticConstructor) return false;
         if (_types.Resolver.SkipModuleInitializers) return true;
 
         var pending = new Stack<TypeDesc>(method.GenericParams);

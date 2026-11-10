@@ -30,6 +30,7 @@ partial class SimplifyInsts
     private bool DevirtualizeLambda(CallInst call, ICompilationLogger logger)
     {
         if (call is not { Method.Name: "Invoke", IsStatic: false, Args: [var instance, ..] }) return false;
+        if (TypeUtils.HasFinalizer(call.Method.DeclaringType)) return false;
 
         DelegateCache? cache = instance is PhiInst phi ? DelegateCache.Match(phi) : null;
         var allocation = cache?.Allocation ?? instance as NewObjInst;
