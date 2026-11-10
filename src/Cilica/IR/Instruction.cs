@@ -138,7 +138,7 @@ public abstract class Instruction : TrackedValue
         var prevValue = _operands[operIndex];
 
         if (newValue != prevValue) {
-            SetOperandStorage(operIndex, newValue);
+            this[operIndex] = newValue;
 
             prevValue?.RemoveUse(this, operIndex);
             newValue.AddUse(this, operIndex);
@@ -146,13 +146,14 @@ public abstract class Instruction : TrackedValue
         }
     }
 
-    internal void SetOperandStorage(int operIndex, Value value)
-    {
-        // Owned arrays may be covariant; writable storage must accept any Value.
-        if (_operands.GetType() != typeof(Value[])) {
-            _operands = new ReadOnlySpan<Value>(_operands).ToArray();
+    internal Value this[int operIndex] {
+        set {
+            // Owned arrays may be covariant; writable storage must accept any Value.
+            if (_operands.GetType() != typeof(Value[])) {
+                _operands = new ReadOnlySpan<Value>(_operands).ToArray();
+            }
+            _operands[operIndex] = value;
         }
-        _operands[operIndex] = value;
     }
 
     /// <summary> Returns a reference wrapper to the operand at <paramref name="index"/>. </summary>

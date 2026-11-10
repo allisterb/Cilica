@@ -182,7 +182,7 @@ public readonly struct UseRef
     internal ref UseDef Def => ref Parent._useDefs[OperIndex];
 
     internal Value OperandStorage {
-        set => Parent.SetOperandStorage(OperIndex, value);
+        set => Parent[OperIndex] = value;
     }
 
     public Value Operand {
