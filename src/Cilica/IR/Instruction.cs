@@ -138,12 +138,21 @@ public abstract class Instruction : TrackedValue
         var prevValue = _operands[operIndex];
 
         if (newValue != prevValue) {
-            _operands[operIndex] = newValue;
+            SetOperandStorage(operIndex, newValue);
 
             prevValue?.RemoveUse(this, operIndex);
             newValue.AddUse(this, operIndex);
             NotifyChanged();
         }
+    }
+
+    internal void SetOperandStorage(int operIndex, Value value)
+    {
+        // Owned arrays may be covariant; writable storage must accept any Value.
+        if (_operands.GetType() != typeof(Value[])) {
+            _operands = new ReadOnlySpan<Value>(_operands).ToArray();
+        }
+        _operands[operIndex] = value;
     }
 
     /// <summary> Returns a reference wrapper to the operand at <paramref name="index"/>. </summary>
@@ -175,6 +184,16 @@ public abstract class Instruction : TrackedValue
     {
         int capacity = (int)Math.Min(Math.Max(4L, _operands.Length * 2L), Array.MaxLength);
         capacity = Math.Max(capacity, required);
+        ResizeOperandBuffers(capacity);
+    }
+
+    private void ResizeOperandBuffers(int capacity)
+    {
+        if (capacity == 0) {
+            _operands = [];
+            _useDefs = [];
+            return;
+        }
         var operands = new Value[capacity];
         var useDefs = new UseDef[capacity];
         Array.Copy(_operands, operands, _numOperands);
@@ -190,12 +209,6 @@ public abstract class Instruction : TrackedValue
         Debug.Assert(startIndex >= 0 && count >= 0 && startIndex + count <= _numOperands);
         int oldCount = _numOperands;
 
-        if (_operands.GetType() != typeof(Value[])) {
-            var operands = new Value[_operands.Length];
-            Array.Copy(_operands, operands, _numOperands);
-            _operands = operands;
-        }
-
         // Remove uses from middle and postfix, relocate them later
         for (int i = startIndex; i < oldCount; i++) {
             _operands[i].RemoveUse(this, i);
@@ -205,6 +218,11 @@ public abstract class Instruction : TrackedValue
         Array.Copy(_operands, startIndex + count, _operands, startIndex, _numOperands - startIndex);
         Array.Clear(_operands, _numOperands, count);
         Array.Clear(_useDefs, _numOperands, count);
+
+        // Keep headroom after shrinking so alternating additions and removals reuse storage.
+        if (_numOperands <= _operands.Length / 4) {
+            ResizeOperandBuffers(_numOperands * 2);
+        }
 
         // Rebuild use links after shifting operands.
         for (int i = startIndex; i < _numOperands; i++) {

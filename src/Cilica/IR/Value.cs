@@ -90,7 +90,7 @@ public abstract class TrackedValue : Value
         var lastNode = default(UseRef);
 
         for (var node = _firstUse; node.Exists; node = node.Next) {
-            node.OperandRef = dest;
+            node.OperandStorage = dest;
             node.Parent.NotifyChanged();
             lastNode = node;
         }
@@ -110,7 +110,7 @@ public abstract class TrackedValue : Value
     {
         for (var node = _firstUse; node.Exists; ) {
             var next = node.Next;
-            node.OperandRef = dest;
+            node.OperandStorage = dest;
             node.Parent.NotifyChanged();
             node.Def = default; // erase node slot to prevent "ghost" links
             node = next;
@@ -181,7 +181,9 @@ public readonly struct UseRef
 
     internal ref UseDef Def => ref Parent._useDefs[OperIndex];
 
-    internal ref Value OperandRef => ref Parent._operands[OperIndex];
+    internal Value OperandStorage {
+        set => Parent.SetOperandStorage(OperIndex, value);
+    }
 
     public Value Operand {
         get => Parent.Operands[OperIndex];
