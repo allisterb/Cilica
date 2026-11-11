@@ -8,7 +8,7 @@ public class PointerType : CompoundType
     public override TypeDesc? BaseType => null;
     protected override string Postfix => "*";
 
-    internal PointerType(TypeDesc elemType, ImmutableArray<TypeModifier> modifiers = default)
+    public PointerType(TypeDesc elemType, ImmutableArray<TypeModifier> modifiers = default)
         : base(elemType, modifiers) { }
 
     protected override CompoundType New(TypeDesc specElemType)
@@ -23,7 +23,7 @@ public class ByrefType : PointerType
     public override TypeDesc? BaseType => null;
     protected override string Postfix => "&";
 
-    internal ByrefType(TypeDesc elemType, ImmutableArray<TypeModifier> modifiers = default)
+    public ByrefType(TypeDesc elemType, ImmutableArray<TypeModifier> modifiers = default)
         : base(elemType, modifiers) { }
 
     protected override CompoundType New(TypeDesc specElemType)

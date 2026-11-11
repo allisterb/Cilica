@@ -68,13 +68,18 @@ public class TypeDef : TypeDefOrSpec
                 _loader?.LoadGenericParams(_handle, out _genericParams);
                 if (_genericParams == null) {
                     // The source publishes before resolving constraints (to break self-reference); if that then fails,
-                    // drop the half-built parameters, and any specs over them, so the next access asks again.
+                    // drop the half-built parameters, and any specs over them, so the next access asks again. Reset in a
+                    // finally rather than catch-and-rethrow: a failure deep in a constraint chain then unwinds once,
+                    // instead of being re-dispatched at every level of an already deep stack.
+                    bool loaded = false;
                     try {
                         _source?.LoadGenericParams(this, out _genericParams);
-                    } catch {
-                        _genericParams = null;
-                        _specCache = null;
-                        throw;
+                        loaded = true;
+                    } finally {
+                        if (!loaded) {
+                            _genericParams = null;
+                            _specCache = null;
+                        }
                     }
                 }
                 _genericParams ??= [];
@@ -294,8 +299,12 @@ public class TypeSpec : TypeDefOrSpec
 
     public override TypeDefOrSpec? BaseType {
         get {
-            if (_baseType == null || _baseType.Definition != Definition.BaseType) {
-                _baseType = Definition.BaseType?.GetSpec(new GenericContext(this));
+            // Respecialise only when the definition's base changes (SetBaseType). Keyed by that base itself, not by
+            // the cached spec's definition, which a base outside the loaded universe may be unable to answer.
+            var definitionBase = Definition.BaseType;
+            if (_baseType == null || !ReferenceEquals(_baseOfDefinition, definitionBase)) {
+                _baseType = definitionBase?.GetSpec(new GenericContext(this));
+                _baseOfDefinition = definitionBase;
             }
             return _baseType;
         }
@@ -313,7 +322,7 @@ public class TypeSpec : TypeDefOrSpec
     MemberList<FieldDef, FieldSpec>? _fields;
     MemberList<MethodDef, MethodSpec>? _methods;
     MemberList<TypeDesc, TypeDesc>? _interfaces;
-    TypeDefOrSpec? _baseType;
+    TypeDefOrSpec? _baseType, _baseOfDefinition;
 
     internal TypeSpec(TypeDef def, ImmutableArray<TypeDesc> args)
     {

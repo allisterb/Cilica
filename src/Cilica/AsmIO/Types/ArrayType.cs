@@ -12,7 +12,7 @@ public class ArrayType : CompoundType
 
     protected override string Postfix => "[]";
 
-    internal ArrayType(TypeDesc elemType, ImmutableArray<TypeModifier> modifiers = default)
+    public ArrayType(TypeDesc elemType, ImmutableArray<TypeModifier> modifiers = default)
         : base(elemType, modifiers) { }
 
     internal bool Implements(TypeDefOrSpec itf, HashSet<(TypeDesc, TypeDesc)>? activeVariance)
