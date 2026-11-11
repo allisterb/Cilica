@@ -184,6 +184,32 @@ public class ModuleResolver : IDisposable
         return module;
     }
 
+    /// <summary>
+    /// Creates an empty module whose types are defined by the caller with <see cref="ModuleDef.DefineSourceType"/> and whose
+    /// members and method bodies are read lazily from <paramref name="source"/>, an external metadata reader. No type is
+    /// defined here, and no other module is resolved, so this can create the core library itself (from a
+    /// <see cref="ResolveImpl"/> override).
+    /// </summary>
+    /// <remarks>
+    /// Use one source per module: when this resolver is disposed, each module disposes its source if it is
+    /// <see cref="IDisposable"/>, and that <c>Dispose</c> must not throw. If this method throws (e.g. a duplicate assembly
+    /// name), the caller still owns the source. Source modules cannot be saved: they have no <c>&lt;Module&gt;</c> type
+    /// unless the caller defines one, and <see cref="ModuleDef.ExportedTypes"/> stays empty (exports are only resolved
+    /// through <see cref="ModuleDef.FindType"/>).
+    /// </remarks>
+    public ModuleDef Create(AssemblyName asmName, IModuleSource source, string? modName = null)
+    {
+        ThrowIfDisposed();
+        Ensure.That(asmName.Name != null, "The assembly name is required");
+        var module = new ModuleDef(this) {
+            AsmName = asmName,
+            ModName = modName ?? asmName.Name + ".dll",
+            _source = source,
+        };
+        AddToCache(asmName.Name, module);
+        return module;
+    }
+
     private void AddToCache(string name, ModuleDef module)
     {
         _cache.Add(name, module);

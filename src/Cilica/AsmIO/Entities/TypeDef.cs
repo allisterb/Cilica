@@ -59,13 +59,24 @@ public class TypeDef : TypeDefOrSpec
     public override TypeAttributes Attribs { get; set; }
 
     private TypeDefOrSpec? _baseType;
-    public override TypeDefOrSpec? BaseType => _baseType ??= _loader?.GetBaseType(_handle);
+    public override TypeDefOrSpec? BaseType => _baseType ??= _loader?.GetBaseType(_handle) ?? _source?.GetBaseType(this);
 
     GenericParamType[]? _genericParams;
     public override GenericParamType[] GenericParams {
         get {
             if (_genericParams == null) {
                 _loader?.LoadGenericParams(_handle, out _genericParams);
+                if (_genericParams == null) {
+                    // The source publishes before resolving constraints (to break self-reference); if that then fails,
+                    // drop the half-built parameters, and any specs over them, so the next access asks again.
+                    try {
+                        _source?.LoadGenericParams(this, out _genericParams);
+                    } catch {
+                        _genericParams = null;
+                        _specCache = null;
+                        throw;
+                    }
+                }
                 _genericParams ??= [];
             }
             return _genericParams;
@@ -93,28 +104,28 @@ public class TypeDef : TypeDefOrSpec
     public bool HasCustomLayout => LayoutSize > 0 || LayoutPack > 0;
 
     List<FieldDef>? _fields;
-    public override List<FieldDef> Fields => _fields ??= (_loader?.LoadFields(this) ?? new());
+    public override List<FieldDef> Fields => _fields ??= (_loader?.LoadFields(this) ?? _source?.LoadFields(this) ?? new());
 
     MethodDefCollection? _methods;
-    public override MethodDefCollection Methods => _methods ??= new(_loader?.LoadMethods(this) ?? new());
+    public override MethodDefCollection Methods => _methods ??= new(_loader?.LoadMethods(this) ?? _source?.LoadMethods(this) ?? new());
 
     internal bool HasStaticConstructor => Methods.HasStaticConstructor;
 
     internal void InvalidateStaticConstructor() => _methods?.InvalidateStaticConstructor();
     
     List<PropertyDef>? _properties;
-    public List<PropertyDef> Properties => _properties ??= (_loader?.LoadProperties(this) ?? new());
+    public List<PropertyDef> Properties => _properties ??= (_loader?.LoadProperties(this) ?? _source?.LoadProperties(this) ?? new());
 
     List<EventDef>? _events;
-    public List<EventDef> Events => _events ??= (_loader?.LoadEvents(this) ?? new());
+    public List<EventDef> Events => _events ??= (_loader?.LoadEvents(this) ?? _source?.LoadEvents(this) ?? new());
 
     public List<TypeDef> NestedTypes { get; } = new();
 
     List<TypeDesc>? _interfaces;
-    public override List<TypeDesc> Interfaces => _interfaces ??= (_loader?.LoadInterfaces(this) ?? new());
+    public override List<TypeDesc> Interfaces => _interfaces ??= (_loader?.LoadInterfaces(this) ?? _source?.LoadInterfaces(this) ?? new());
 
     Dictionary<MethodDesc, MethodDef>? _methodImpls;
-    public Dictionary<MethodDesc, MethodDef> MethodImpls => _methodImpls ??= (_loader?.LoadMethodImpls(this) ?? new());
+    public Dictionary<MethodDesc, MethodDef> MethodImpls => _methodImpls ??= (_loader?.LoadMethodImpls(this) ?? _source?.LoadMethodImpls(this) ?? new());
 
     internal IList<CustomAttrib>? _customAttribs;
 
@@ -126,6 +137,9 @@ public class TypeDef : TypeDefOrSpec
     private TypeSpecCache? _specCache;
     internal TypeDefinitionHandle _handle;
     private ModuleLoader? _loader => _handle.IsNil ? null : Module._loader;
+    // Only types defined with ModuleDef.DefineSourceType consult the source; created and file-loaded types never do.
+    private IModuleSource? _source => _isSourceType ? Module._source : null;
+    internal bool _isSourceType;
 
     internal TypeDef(
         ModuleDef mod, string? ns, string name,

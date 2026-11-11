@@ -128,7 +128,8 @@ public class MethodDef : MethodDefOrSpec
 
     private ILMethodBody? _ilBody;
     public ILMethodBody? ILBody {
-        get => _ilBody ??= (_bodyRva != 0 ? new ILMethodBody(Module._loader!, _bodyRva) : null);
+        get => _ilBody ??= (_bodyRva != 0 ? new ILMethodBody(Module._loader!, _bodyRva)
+            : DeclaringType._isSourceType ? Module._source?.LoadBody(this) : null);
         set => _ilBody = value;
     }
     public IR.MethodBody? Body { get; set; }

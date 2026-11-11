@@ -37,6 +37,7 @@ public class ModuleDef : EntityDesc
     internal List<CustomAttrib> _asmCustomAttribs = new(), _modCustomAttribs = new();
 
     internal ModuleLoader? _loader;
+    internal IModuleSource? _source;
     private DebugSymbolStore? _debugSymbols;
     private bool _triedToLoadDebugSymbols = false;
 
@@ -50,7 +51,7 @@ public class ModuleDef : EntityDesc
         var type = _typeDefs.Find(ns, name);
 
         if (type == null && includeExports) {
-            type = _exportedTypes?.Find(ns, name) ?? _loader?.FindExportedType(ns, name);
+            type = _exportedTypes?.Find(ns, name) ?? _loader?.FindExportedType(ns, name) ?? _source?.FindExportedType(ns, name);
         }
         if (type == null && throwIfNotFound) {
             throw new InvalidOperationException($"Type {ns}.{name} not found");
@@ -71,6 +72,29 @@ public class ModuleDef : EntityDesc
             this, ns, name, attrs, genericParams ?? [],
             baseType ?? Resolver.SysTypes.Object
         );
+        _typeDefs.Add(type);
+        return type;
+    }
+
+    /// <summary>
+    /// Defines a type of a module created over an <see cref="IModuleSource"/>. Unlike <see cref="CreateType"/>, its base type
+    /// and generic parameters are not set here: they, and the type's members, are requested from the source on first use.
+    /// </summary>
+    /// <param name="declaringType"> The enclosing type, for a nested type (whose <paramref name="attrs"/> must be nested). </param>
+    public TypeDef DefineSourceType(string? ns, string name, TypeAttributes attrs, TypeDef? declaringType = null)
+    {
+        Ensure.That(_source != null, "Only a module created over an IModuleSource can define source types");
+        Ensure.That(declaringType == null || declaringType.Module == this, "The declaring type must belong to this module");
+        // Validate before any mutation: TypeList files a type by its attributes, not by declaringType.
+        Ensure.That((declaringType != null) == ((attrs & TypeAttributes.NestedFamANDAssem) != 0),
+            "A nested type needs both a declaring type and nested visibility");
+        if (declaringType != null ? declaringType.FindNestedType(name) != null : FindType(ns, name, includeExports: false) != null) {
+            throw new InvalidOperationException("A type with the same name already exists");
+        }
+        var type = new TypeDef(this, ns, name, attrs) { _isSourceType = true };
+        if (declaringType != null) {
+            type.SetDeclaringType(declaringType);
+        }
         _typeDefs.Add(type);
         return type;
     }
@@ -219,6 +243,9 @@ public class ModuleDef : EntityDesc
         _debugSymbols = null;
         _loader?._pe.Dispose();
         _loader = null;
+        var source = _source;
+        _source = null;
+        (source as IDisposable)?.Dispose();
     }
 
     public override string ToString()
