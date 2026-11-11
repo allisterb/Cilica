@@ -201,6 +201,113 @@
         
         ret
     }
+
+    // Unsafe.Subtract<T>(ref T, int)
+    .method public static !!T& SubtractElementOffset<T>(!!T& source, int32 elementOffset)
+    {
+        ldarg.0
+        ldarg.1
+        sizeof !!T
+        conv.i
+        mul
+        sub
+        ret
+    }
+
+    // Unsafe.SubtractByteOffset<T>(ref T, nint)
+    .method public static uint8& SubtractByteOffset(uint8& source, native int byteOffset)
+    {
+        ldarg.0
+        ldarg.1
+        sub
+        ret
+    }
+
+    .method public static uint8& SubtractInt32Offset(uint8& source, int32 byteOffset)
+    {
+        ldarg.0
+        ldarg.1
+        sub
+        ret
+    }
+
+    .method public static uint8& SubtractByteOffsetUnsignedChecked(uint8& source, native int byteOffset)
+    {
+        ldarg.0
+        ldarg.1
+        sub.ovf.un
+        ret
+    }
+
+    .method public static native int ByrefDistanceUnsignedChecked(uint8& origin, uint8& target)
+    {
+        ldarg.1
+        ldarg.0
+        sub.ovf.un
+        ret
+    }
+
+    .method public static uint8& AddByteOffsetUnsignedChecked(native int byteOffset, uint8& source)
+    {
+        ldarg.0
+        ldarg.1
+        add.ovf.un
+        ret
+    }
+
+    // Unsafe.IsNullRef<T>(ref T)
+    .method public static bool IsNullRef(uint8& source)
+    {
+        ldarg.0
+        ldc.i4.0
+        conv.u
+        ceq
+        ret
+    }
+
+    .method public static bool IsNotNullRefBranch(uint8& source)
+    {
+        ldarg.0
+        ldc.i4.0
+        conv.u
+        bne.un.s notNull
+        ldc.i4.0
+        ret
+    notNull:
+        ldc.i4.1
+        ret
+    }
+
+    // Invalid: int32 vs & is not in ECMA335 III.1.5 table 4
+    .method public static bool ByrefEqualsInt32(uint8& source)
+    {
+        ldarg.0
+        ldc.i4.0
+        ceq
+        ret
+    }
+
+    // Invalid: int32 vs & is not in ECMA335 III.1.5 table 4
+    .method public static bool ByrefNotEqualsInt32Branch(uint8& source)
+    {
+        ldarg.0
+        ldc.i4.0
+        bne.un.s notEqual
+        ldc.i4.0
+        ret
+    notEqual:
+        ldc.i4.1
+        ret
+    }
+
+    // int32 vs native int is valid, and unmanaged pointers are native int on the stack
+    .method public static bool PointerEqualsInt32(uint8* pointer)
+    {
+        ldarg.0
+        ldc.i4.0
+        ceq
+        ret
+    }
 }
 
 .class public sequential ansi sealed beforefieldinit NativeFieldPair extends [System.Runtime]System.ValueType

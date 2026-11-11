@@ -221,6 +221,9 @@ internal class ModuleLoader
     {
         var typeInfo = _reader.GetTypeDefinition(parent._handle);
         var list = new List<FieldDef>();
+        // If loading fails part-way, the property stays unset and a later access loads again:
+        // roll back the entries cached so far, so the retry does not find stale instances.
+        using var rollback = new TableRollback(_tables);
 
         foreach (var handle in typeInfo.GetFields()) {
             var info = _reader.GetFieldDefinition(handle);
@@ -252,14 +255,16 @@ internal class ModuleLoader
             field._customAttribs = LoadCustomAttribs(info.GetCustomAttributes());
 
             list.Add(field);
-            _tables.Set(handle, field);
+            rollback.Set(handle, field);
         }
+        rollback.Commit();
         return list;
     }
     public List<MethodDef> LoadMethods(TypeDef parent)
     {
         var typeInfo = _reader.GetTypeDefinition(parent._handle);
         var list = new List<MethodDef>();
+        using var rollback = new TableRollback(_tables); // see LoadFields()
 
         foreach (var handle in typeInfo.GetMethods()) {
             var info = _reader.GetMethodDefinition(handle);
@@ -316,8 +321,9 @@ internal class ModuleLoader
             }
 
             list.Add(method);
-            _tables.Set(handle, method);
+            rollback.Set(handle, method);
         }
+        rollback.Commit();
         return list;
     }
     private void LoadParams(MethodDef method, MethodDefinition info)
@@ -405,13 +411,19 @@ internal class ModuleLoader
     {
         var typeInfo = _reader.GetTypeDefinition(parent._handle);
         var list = new List<TypeDesc>();
+        // Attach the attributes only once every interface resolved: a load that fails part-way is retried
+        // on next access, and must not find the keys of the failed attempt (see LoadFields()).
+        var attribs = new List<((EntityDesc, EntityDesc?) Key, CustomAttrib[] Attribs)>();
 
         foreach (var itfHandle in typeInfo.GetInterfaceImplementations()) {
             var itf = _reader.GetInterfaceImplementation(itfHandle);
             var type = (TypeDesc)GetEntity(itf.Interface);
 
             list.Add(type);
-            parent.SetImplCustomAttribs((type, null), LoadCustomAttribs(itf.GetCustomAttributes()));
+            attribs.Add(((type, null), LoadCustomAttribs(itf.GetCustomAttributes())));
+        }
+        foreach (var (key, attribList) in attribs) {
+            parent.SetImplCustomAttribs(key, attribList);
         }
         return list;
     }
@@ -419,6 +431,7 @@ internal class ModuleLoader
     {
         var typeInfo = _reader.GetTypeDefinition(parent._handle);
         var map = new Dictionary<MethodDesc, MethodDef>();
+        var attribs = new List<((EntityDesc, EntityDesc?) Key, CustomAttrib[] Attribs)>(); // see LoadInterfaces()
 
         foreach (var implHandle in typeInfo.GetMethodImplementations()) {
             var impl = _reader.GetMethodImplementation(implHandle);
@@ -426,7 +439,10 @@ internal class ModuleLoader
             var decl = (MethodDesc)GetEntity(impl.MethodDeclaration);
 
             map.Add(decl, body);
-            parent.SetImplCustomAttribs((decl, body), LoadCustomAttribs(impl.GetCustomAttributes()));
+            attribs.Add(((decl, body), LoadCustomAttribs(impl.GetCustomAttributes())));
+        }
+        foreach (var (key, attribList) in attribs) {
+            parent.SetImplCustomAttribs(key, attribList);
         }
         return map;
     }
@@ -639,6 +655,12 @@ internal class ModuleLoader
             _entities[idx] = entity;
         }
 
+        /// <summary> Puts back an entry's value from before a load that did not complete (null to clear it). </summary>
+        public void Restore(EntityHandle handle, EntityDesc? previous)
+        {
+            _entities[GetIndex(handle)] = previous!;
+        }
+
         private int GetIndex(EntityHandle handle)
         {
             var tableIdx = (int)handle.Kind;
@@ -648,6 +670,38 @@ internal class ModuleLoader
             int index = start + MetadataTokens.GetRowNumber(handle) - 1; // rows are 1 based
             Ensure.That(index >= start && index < end);
             return index;
+        }
+    }
+
+    /// <summary> Sets table entries, and restores their previous values on dispose unless <see cref="Commit"/> was called. </summary>
+    sealed class TableRollback(TableEntryCache tables) : IDisposable
+    {
+        List<(EntityHandle Handle, EntityDesc? Previous, EntityDesc Written)>? _changed;
+        bool _committed;
+
+        public void Set(EntityHandle handle, EntityDesc entity)
+        {
+            var previous = tables.Get(handle);
+            if (previous != entity) {
+                (_changed ??= new()).Add((handle, previous, entity));
+            }
+            tables.Set(handle, entity);
+        }
+
+        public void Commit() => _committed = true;
+
+        public void Dispose()
+        {
+            if (_committed || _changed == null) return;
+
+            // In reverse, so a handle set twice ends with its value from before the load. Only entries
+            // still holding what this load wrote: a nested load may since have committed its own.
+            for (int i = _changed.Count - 1; i >= 0; i--) {
+                var (handle, previous, written) = _changed[i];
+                if (tables.Get(handle) == written) {
+                    tables.Restore(handle, previous);
+                }
+            }
         }
     }
 }

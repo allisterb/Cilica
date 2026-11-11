@@ -45,8 +45,9 @@ public class CompareInst : Instruction
         if (typeL > typeR) {
             (typeL, typeR) = (typeR, typeL);
         }
-        // ECMA allows comparisons between Int and NInt
-        Ensure.That(typeL == typeR || (typeL == StackType.Int && typeR == StackType.NInt));
+        // ECMA allows comparisons between Int and NInt, and equality between NInt and ByRef (III.1.5 table 4)
+        Ensure.That(typeL == typeR || (typeL == StackType.Int && typeR == StackType.NInt) ||
+                    (typeL == StackType.NInt && typeR == StackType.ByRef && op is CompareOp.Eq or CompareOp.Ne));
         // Float comparison ops don't exist in CIL, but we want to enforce typing
         Ensure.That((typeL != StackType.Float && typeR != StackType.Float) || op.IsFloat());
     }
