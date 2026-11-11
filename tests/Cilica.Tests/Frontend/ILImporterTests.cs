@@ -109,6 +109,142 @@ public class ILImporterTests(ModuleResolverFixture fixture)
     delegate nint ByrefOffset(ref byte origin, ref byte target);
     delegate nint NativeFromByref(ref byte address);
 
+    // ECMA335 III.1.5 tables 2, 4 and 7: & - int/nint, & - &, nint + & and nint ==/!= &
+    [Theory]
+    [InlineData("SubtractElementOffset")]
+    [InlineData("SubtractByteOffset")]
+    [InlineData("SubtractInt32Offset")]
+    [InlineData("SubtractByteOffsetUnsignedChecked")]
+    [InlineData("ByrefDistanceUnsignedChecked")]
+    [InlineData("AddByteOffsetUnsignedChecked")]
+    [InlineData("IsNullRef")]
+    [InlineData("IsNotNullRefBranch")]
+    [InlineData("PointerEqualsInt32")]
+    public void MixedByrefAndNativeIntOperandsImport(string name)
+    {
+        using var resolver = new ModuleResolver();
+        var method = LoadImporterCase(resolver, name);
+        var body = method.Body = ILImporter.ParseCode(method);
+        IRVerifier.Verify(body);
+    }
+
+    [Theory]
+    [InlineData("ByrefEqualsInt32")]
+    [InlineData("ByrefNotEqualsInt32Branch")]
+    public void Int32AndByrefComparisonIsRejected(string name)
+    {
+        using var resolver = new ModuleResolver();
+        var method = LoadImporterCase(resolver, name);
+        Assert.Throws<InvalidOperationException>(() => ILImporter.ParseCode(method));
+    }
+
+    [Fact]
+    public void ByrefMinusNativeOffsetSurvivesRepeatedOptimization()
+        => OptimizeRepeatedly<SubtractByteOffset>("SubtractByteOffset", run => {
+            var bytes = new byte[32];
+            Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(ref bytes[1], ref run(ref bytes[31], 30)));
+            Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(ref bytes[31], ref run(ref bytes[0], -31)));
+        });
+
+    [Fact]
+    public void ByrefMinusInt32OffsetSurvivesRepeatedOptimization()
+        => OptimizeRepeatedly<SubtractInt32Offset>("SubtractInt32Offset", run => {
+            var bytes = new byte[32];
+            Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(ref bytes[1], ref run(ref bytes[31], 30)));
+            Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(ref bytes[31], ref run(ref bytes[0], -31)));
+        });
+
+    // The overflow cases fail if a pass drops the check from sub.ovf.un/add.ovf.un
+    [Fact]
+    public void UnsignedCheckedByrefMinusOffsetSurvivesRepeatedOptimization()
+        => OptimizeRepeatedly<SubtractByteOffset>("SubtractByteOffsetUnsignedChecked", run => {
+            var bytes = new byte[32];
+            Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(ref bytes[1], ref run(ref bytes[31], 30)));
+            Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(ref bytes[31], ref run(ref bytes[31], 0)));
+            Assert.Throws<OverflowException>(() => run(ref bytes[0], -1));
+        });
+
+    [Fact]
+    public void UnsignedCheckedByrefDistanceSurvivesRepeatedOptimization()
+        => OptimizeRepeatedly<ByrefOffset>("ByrefDistanceUnsignedChecked", run => {
+            var bytes = new byte[32];
+            Assert.Equal((nint)31, run(ref bytes[0], ref bytes[31]));
+            Assert.Equal((nint)0, run(ref bytes[5], ref bytes[5]));
+            Assert.Throws<OverflowException>(() => run(ref bytes[31], ref bytes[0]));
+        });
+
+    [Fact]
+    public void UnsignedCheckedOffsetPlusByrefSurvivesRepeatedOptimization()
+        => OptimizeRepeatedly<AddByteOffset>("AddByteOffsetUnsignedChecked", run => {
+            var bytes = new byte[32];
+            Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(ref bytes[31], ref run(30, ref bytes[1])));
+            Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(ref bytes[0], ref run(0, ref bytes[0])));
+            Assert.Throws<OverflowException>(() => run(-1, ref bytes[1]));
+        });
+
+    [Fact]
+    public unsafe void Int32AndPointerComparisonSurvivesRepeatedOptimization()
+        => OptimizeRepeatedly<CheckPointer>("PointerEqualsInt32", run => {
+            byte value = 0;
+            Assert.True(run(null));
+            Assert.False(run(&value));
+        });
+
+    [Fact]
+    public void GenericByrefMinusScaledOffsetSurvivesOptimization()
+    {
+        using var resolver = new ModuleResolver();
+        var method = LoadImporterCase(resolver, "SubtractElementOffset");
+        var compilation = new Compilation(method.Module, new VoidLogger(), new() { VerifyEachPass = true });
+        CompilationPipeline.CreateDefault(compilation).Run([method]).ThrowIfFailed();
+        method.ILBody = Cilica.CodeGen.Cil.ILGenerator.GenerateCode(method.Body!);
+        using var output = new MemoryStream();
+        method.Module.Save(output, null, "subtract.dll");
+        var run = System.Reflection.Assembly.Load(output.ToArray()).GetType("ImporterCases")!.GetMethod("SubtractElementOffset")!
+            .MakeGenericMethod(typeof(long)).CreateDelegate<SubtractElementOffset>();
+        var values = new long[8];
+        Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(ref values[2], ref run(ref values[7], 5)));
+        Assert.True(System.Runtime.CompilerServices.Unsafe.AreSame(ref values[7], ref run(ref values[2], -5)));
+    }
+
+    [Theory]
+    [InlineData("IsNullRef", true)]
+    [InlineData("IsNotNullRefBranch", false)]
+    public void NullRefChecksAgainstNativeZeroSurviveRepeatedOptimization(string name, bool expectedForNull)
+        => OptimizeRepeatedly<CheckByref>(name, run => {
+            var bytes = new byte[1];
+            Assert.Equal(expectedForNull, run(ref System.Runtime.CompilerServices.Unsafe.NullRef<byte>()));
+            Assert.Equal(!expectedForNull, run(ref bytes[0]));
+        });
+
+    static MethodDef LoadImporterCase(ModuleResolver resolver, string name)
+    {
+        resolver.AddTrustedSearchPaths();
+        var module = resolver.Load(Path.Combine(AppContext.BaseDirectory, "TestAsm.IL.dll"));
+        return (MethodDef)module.FindType(null, "ImporterCases")!.FindMethod(name);
+    }
+
+    // Optimizes the method with the default pipeline and runs `check` on the result, re-importing the emitted IL each round.
+    static void OptimizeRepeatedly<TDelegate>(string name, Action<TDelegate> check) where TDelegate : Delegate
+    {
+        using var resolver = new ModuleResolver();
+        var method = LoadImporterCase(resolver, name);
+
+        for (int round = 0; round < 3; round++) {
+            var compilation = new Compilation(method.Module, new VoidLogger(), new() { VerifyEachPass = true });
+            CompilationPipeline.CreateDefault(compilation).Run([method]).ThrowIfFailed();
+            check(Utils.Compile<TDelegate>(method.Body!));
+            method.Body = null;
+        }
+    }
+
+    delegate ref byte SubtractByteOffset(ref byte source, nint byteOffset);
+    delegate ref byte SubtractInt32Offset(ref byte source, int byteOffset);
+    delegate ref long SubtractElementOffset(ref long source, int elementOffset);
+    delegate ref byte AddByteOffset(nint byteOffset, ref byte source);
+    delegate bool CheckByref(ref byte source);
+    unsafe delegate bool CheckPointer(byte* pointer);
+
     [Fact]
     public void InitializedByrefLocalsRemainNullAfterPromotion()
     {

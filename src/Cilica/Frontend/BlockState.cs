@@ -700,13 +700,14 @@ internal class BlockState
         if (!isFloat) {
             // CIL's signed and unsigned comparisons extend mixed int32/native
             // operands differently. Make the extension explicit before a later
-            // pass negates or fuses the comparison into a branch.
+            // pass negates or fuses the comparison into a branch. Only against native int (which
+            // includes unmanaged pointers): int32 compared with a byref is invalid (ECMA335 III.1.5 table 4).
             var nativeType = unsignedNativeExtension ? PrimType.UIntPtr : PrimType.IntPtr;
-            if (left.ResultType.IsPointerLike() && right.ResultType.StackType == StackType.Int) {
+            if (left.ResultType.StackType == StackType.NInt && right.ResultType.StackType == StackType.Int) {
                 var conversion = new ConvertInst(right, nativeType);
                 Emit(conversion);
                 right = conversion;
-            } else if (right.ResultType.IsPointerLike() && left.ResultType.StackType == StackType.Int) {
+            } else if (right.ResultType.StackType == StackType.NInt && left.ResultType.StackType == StackType.Int) {
                 var conversion = new ConvertInst(left, nativeType);
                 Emit(conversion);
                 left = conversion;

@@ -59,7 +59,8 @@ public class BinaryInst : Instruction
                     => a == PrimType.Double ? a : b, // pick double over float
                 StackType.NInt
                     => a is PointerType ? a : PrimType.IntPtr, // pick pointer over nint
-                StackType.ByRef when op == BinaryOp.Sub
+                // & - & = nint (ECMA335 III.1.5 tables 2 and 7)
+                StackType.ByRef when op is BinaryOp.Sub or BinaryOp.USubOvf
                     => PrimType.IntPtr,
                 StackType.Struct when a is VectorType && a == b
                     => a,
@@ -77,6 +78,15 @@ public class BinaryInst : Instruction
             return sa.GetPrimType(a.Kind.IsSigned());
         }
 
+        // & - int/nint = & (ECMA335 III.1.5 tables 2 and 7). Subtraction is not commutative,
+        // so this must be matched before the operands are sorted below.
+        if (sa == StackType.ByRef &&
+            sb is StackType.Int or StackType.NInt &&
+            op is BinaryOp.Sub or BinaryOp.USubOvf
+        ) {
+            return a;
+        }
+
         // Sort (a, b) to reduce number of cases, such that sa <= sb
         // in respect to declaration order: [int long nint float nint byref]
         if (sa > sb) { (sa, sb, a, b) = (sb, sa, b, a); }
@@ -85,7 +95,7 @@ public class BinaryInst : Instruction
             (StackType.Int, StackType.NInt, _)
                 => b is PointerType ? b : sb.GetPrimType(b.Kind.IsSigned()),
             // int/nint + & = &
-            (StackType.Int or StackType.NInt, StackType.ByRef, BinaryOp.Add or BinaryOp.AddOvf)
+            (StackType.Int or StackType.NInt, StackType.ByRef, BinaryOp.Add or BinaryOp.AddOvf or BinaryOp.UAddOvf)
                 => b,
             _ => null
         };
