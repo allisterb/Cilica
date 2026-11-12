@@ -12,16 +12,18 @@ public class ILImporter
     internal readonly VarFlags[] _varFlags;
     internal readonly Value?[] _varSlots;
     internal readonly MethodDebugSymbols? _debugSyms;
+    internal readonly Dictionary<Instruction, int>? _ilOffsets;
 
     readonly Dictionary<int, BlockState> _blocks = new();
     internal List<BlockState> _blocksEndingWithEhResume = new();
 
-    private ILImporter(MethodDef method)
+    private ILImporter(MethodDef method, Dictionary<Instruction, int>? ilOffsets)
     {
         Ensure.That(method.ILBody != null);
 
         _ilBody = method.ILBody;
         _method = method;
+        _ilOffsets = ilOffsets;
         _body = new MethodBody(method) { InitLocals = _ilBody.InitLocals };
 
         _regionTree = RegionNode.BuildTree(_ilBody.ExceptionClauses);
@@ -32,12 +34,21 @@ public class ILImporter
         _varSlots = new Value[numVars];
     }
 
-    public static MethodBody ParseCode(MethodDef method)
+    public static MethodBody ParseCode(MethodDef method) => ParseCode(method, null);
+
+    /// <summary>
+    /// Imports the method's IL. If <paramref name="ilOffsets"/> is given, each emitted instruction is mapped to the offset
+    /// of the IL opcode it came from (not its prefix's); a block's fallthrough branch takes its last opcode's, and casts
+    /// added by reference normalization take their user's. Synthesized instructions, such as phis, guards, argument
+    /// copies, store coercions, block-split and leave branches, and <c>initobj</c>, have no entry. Several instructions may
+    /// share an offset.
+    /// </summary>
+    public static MethodBody ParseCode(MethodDef method, Dictionary<Instruction, int>? ilOffsets)
     {
         if (method.IsRuntimeAsync) {
             throw new NotSupportedException("Runtime-async method bodies require a distinct return and suspension model");
         }
-        return new ILImporter(method).ImportCode();
+        return new ILImporter(method, ilOffsets).ImportCode();
     }
 
     private MethodBody ImportCode()
@@ -110,6 +121,9 @@ public class ILImporter
                 if (!source.IsManagedObject() || value is ConstNull or CilIntrinsic.Box || source is GenericParamType ||
                     !target.IsManagedObject() || target is GenericParamType || source.IsAssignableTo(target)) return;
                 var cast = new CilIntrinsic.RefCast(target, value) { DebugLocation = inst.DebugLocation };
+                if (_ilOffsets != null && _ilOffsets.TryGetValue(inst, out int ilOffset)) {
+                    _ilOffsets[cast] = ilOffset;
+                }
                 cast.InsertBefore(inst);
                 inst.ReplaceOperand(index, cast);
             }

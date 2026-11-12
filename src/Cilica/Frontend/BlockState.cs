@@ -21,6 +21,7 @@ internal class BlockState
     private TypeDesc? _callConstraint;
 
     private DebugSourceLocation? _currDebugLoc = null;
+    private int _currILOffset;
 
     public BlockState(ILImporter importer, int startOffset)
     {
@@ -39,6 +40,9 @@ internal class BlockState
     {
         Block.InsertLast(inst);
         inst.DebugLocation = _currDebugLoc;
+        if (_importer._ilOffsets is { } ilOffsets) {
+            ilOffsets[inst] = _currILOffset;
+        }
     }
 
     public void PushNoEmit(Value value)
@@ -171,6 +175,7 @@ internal class BlockState
 
         for (int instructionIndex = 0; instructionIndex < code.Length; instructionIndex++) {
             ref var inst = ref code[instructionIndex];
+            _currILOffset = inst.Offset;
             // Update debug location info
             if (seqPoints != null) {
                 while (seqIndex + 1 < seqPoints.Count &&  inst.Offset >= seqPoints[seqIndex + 1].Offset) {
