@@ -469,6 +469,81 @@ public class ILImporterTests(ModuleResolverFixture fixture)
     }
 
     [Fact]
+    public void ILOffsetsMapCallSitesToTheirOwnOpcodesAndSurvivePromotion()
+    {
+        using var resolver = new ModuleResolver();
+        resolver.AddTrustedSearchPaths();
+        var module = resolver.Load(Path.Combine(AppContext.BaseDirectory, "TestAsm.IL.dll"));
+        var method = (MethodDef)module.FindType(null, "ImporterCases")!.FindMethod("CallSiteOffsets");
+        var il = method.ILBody!.Instructions;
+        int OffsetOf(ILCode code, int occurrence = 0) => il.Where(i => i.OpCode == code).ElementAt(occurrence).Offset;
+
+        var offsets = new Dictionary<Instruction, int>();
+        var body = method.Body = ILImporter.ParseCode(method, offsets);
+        var compilation = new Compilation(module, new VoidLogger(), new() { VerifyEachPass = true });
+        PassRunner.Run(new SsaPromotion(), new MethodTransformContext(compilation, body));
+        IRVerifier.Verify(body);
+        var remaining = body.Instructions().ToHashSet();
+        Assert.Contains(offsets.Keys, recorded => recorded is StoreInst && !remaining.Contains(recorded));
+
+        var calls = body.Instructions().OfType<CallInst>().ToArray();
+        Assert.Equal(2, calls.Length);
+        Assert.Equal(OffsetOf(ILCode.Callvirt, 0), offsets[calls.Single(c => c.Constraint == null)]);
+        var constrained = calls.Single(c => c.Constraint != null);
+        Assert.Equal(OffsetOf(ILCode.Callvirt, 1), offsets[constrained]);
+        Assert.NotEqual(OffsetOf(ILCode.Constrained_), offsets[constrained]);
+
+        var pointers = body.Instructions().OfType<FuncAddrInst>().ToArray();
+        Assert.Equal(OffsetOf(ILCode.Ldftn), offsets[pointers.Single(p => !p.IsVirtual)]);
+        Assert.Equal(OffsetOf(ILCode.Ldvirtftn), offsets[pointers.Single(p => p.IsVirtual)]);
+        Assert.Equal(OffsetOf(ILCode.Newobj), offsets[Assert.Single(body.Instructions().OfType<NewObjInst>())]);
+    }
+
+    [Fact]
+    public void ReferenceCastsInsertedForACallTakeItsILOffset()
+    {
+        using var resolver = new ModuleResolver();
+        resolver.AddTrustedSearchPaths();
+        var module = resolver.Load(Path.Combine(AppContext.BaseDirectory, "TestAsm.IL.dll"));
+        var method = (MethodDef)module.FindType(null, "ImporterCases")!.FindMethod("UncheckedStringCall");
+        var offsets = new Dictionary<Instruction, int>();
+        var body = ILImporter.ParseCode(method, offsets);
+        var call = Assert.Single(body.Instructions().OfType<CallInst>());
+        var cast = Assert.Single(body.Instructions().OfType<CilIntrinsic.RefCast>());
+        Assert.Equal(method.ILBody!.Instructions.Single(i => i.OpCode == ILCode.Callvirt).Offset, offsets[call]);
+        Assert.Equal(offsets[call], offsets[cast]);
+    }
+
+    [Fact]
+    public void RecordingILOffsetsDoesNotChangeTheImportedBody()
+    {
+        using var resolver = new ModuleResolver();
+        resolver.AddTrustedSearchPaths();
+        var module = resolver.Load(Path.Combine(AppContext.BaseDirectory, "TestAsm.IL.dll"));
+        string Print(Cilica.IR.MethodBody body)
+        {
+            var writer = new StringWriter();
+            IRPrinter.ExportPlain(body, writer);
+            return writer.ToString();
+        }
+        var methods = module.FindType(null, "ImporterCases")!.Methods.Where(m => m.ILBody != null).ToArray();
+        Assert.True(methods.Length > 10);
+        foreach (var method in methods) {
+            Assert.Equal(Import(method, null), Import(method, new Dictionary<Instruction, int>()));
+        }
+
+        // A method that does not import must fail the same way with the table.
+        string Import(MethodDef method, Dictionary<Instruction, int>? ilOffsets)
+        {
+            try {
+                return Print(ILImporter.ParseCode(method, ilOffsets));
+            } catch (Exception ex) {
+                return $"{ex.GetType().Name}: {ex.Message}";
+            }
+        }
+    }
+
+    [Fact]
     public void PinnedLocalsSurviveImportAndSsaPromotion()
     {
         var module = fixture.Resolver.Resolve("TestAsm.IL");

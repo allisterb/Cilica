@@ -188,6 +188,29 @@
         ret
     }
 
+    .method public static object CallSiteOffsets<T>(!!T item, string text)
+    {
+        .locals init (string temp)
+        ldarg.1
+        stloc.0
+        br.s Next
+    Next:
+        ldloc.0
+        callvirt instance int32 [System.Runtime]System.String::get_Length()
+        pop
+        ldarga.s item
+        constrained. !!T
+        callvirt instance string [System.Runtime]System.Object::ToString()
+        pop
+        ldftn void ImporterCases::MutPtr(int32*)
+        pop
+        ldloc.0
+        ldvirtftn instance string [System.Runtime]System.Object::ToString()
+        pop
+        newobj instance void [System.Runtime]System.Object::.ctor()
+        ret
+    }
+
     .method private static void MutPtr(int32* ptr)
     {
         //*ptr ^= 0x5555
